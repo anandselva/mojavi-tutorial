@@ -1,0 +1,385 @@
+Mojavi for Beginners: Part 1
+
+Note: this tutorial applies to Mojavi version 2 (PHP4). It's no longer up-to-date, but I leave it here in case anyone finds it of use. See the Mojavi site for more recent info, and if you want a complete application framework, I'd recommend Symfony, which is based on Mojavi and is now used to power this site.
+Assumptions
+
+    Running on Apache and Linux; other systems may vary
+    Server is called server.com and is set up to serve index.php as default
+    Mojavi installed in top level of webspace, so server.com/ will run Mojavi's index.php
+    Knowledge of OOP in PHP
+    Tutorial is based on Mojavi 2.0.0 as of July 2004
+    Using PHP4. [PHP5: if you try and run Mojavi 2 on PHP5, you may get error messages because its error handling routines do not cater for the new STRICT error level; to get round this, add something like 'case E_STRICT: break;' to the switch statement in opt/logging/ErrorLogger::standard so it ignores STRICT errors. You may need to ignore E_WARNINGs as well.]
+
+Installing minimal Mojavi system
+You need the following from the distribution tarball: index.php, mojavi-all-classes.php, webapp/config.php. mojavi-all-classes.php contains all classes in lib/, so you do not need lib/; however, the classes in lib/ contain lots of documenting comments which are not in mojavi-all-classes.php, so you may prefer to look at the classes in lib/ for explanations. As supplied, these classes in turn require further classes from opt/: auth/, user/, util/ and 3 classes from opt/logging: ErrorLogger.class.php, PatternLayout.class.php, StdoutAppender.class.php. In addition, we use validators/ChoiceValidator.class.php later in this tutorial.
+For the purposes of this tutorial, it doesn't matter what directory structure you use; you can use the structure in the tarball, or whatever you like. Important is that they are configured to load:
+
+    index.php must point to config.php, so edit this and comment out the die instruction at the end
+    config.php must point to BASE_DIR, OPT_DIR, MOJAVI_FILE (mojavi-all-classes.php), so edit this to reflect your directory structure. You can leave the other settings for the moment.
+
+Now if you request server.com/ in your browser you should get the error msg 'ERROR_404_MODULE (Default) or ERROR_404_ACTION (PageNotFound)'. (If you get a message about failed opening of a class, you have not set up config.php correctly.) Mojavi is now working but as we haven't set up an application yet, it's not surprising that it can't find it. So let's build a simple system that uses the main features of Mojavi.
+Scenario
+We have a list of children in a school. The user can request the names of all the boys, all the girls, or both. Names should be displayed alphabetically; boys' names should be displayed in blue, girls' in red. If a child has won a prize this year, a star * should appear by the name.
+So, this means we need:
+
+    a list of the children stored somewhere in the system: name, sex, and whether prizewinner
+    an input screen for the user to specify which sex to display
+    logic to fetch the names of the children meeting the criteria
+    an output screen to display them to the user
+    output/presentation logic to display them in the appropriate colour with or without star
+    something to coordinate all this
+
+The finished article is here [no longer works: needs adapting for newer versions of PHP].
+
+In Sun's widely-used adaptation of MVC for J2EE (see http://java.sun.com/blueprints/patterns/MVC-detailed.html): the model represents the data and its management, sometimes called business or application logic; the view specifies the rendering of that data, sometimes called presentation logic; and the controller is the coordinator between the two. So, in these terms, 1. and 3. above are model; 2. 4. and 5. are view; 6. is controller. The view does not care how the list is stored, nor how it is accessed. The model does not care how it is displayed. This separation of concerns means that the two can be independent: there may be two people involved: a designer responsible for the input/output screens, a programmer responsible for the application logic. Also, model and view can be changed independent of one another: the list of children can be moved to a separate database server, for example, without affecting the view; the screens can be translated to another (human) language without affecting the model.
+
+So, how does Mojavi handle all this?
+Mojavi Process
+In MVC terms:
+
+    user requests server.com/ (GET request)
+    controller analyses the request
+    as this is simply requesting the input screen, the model is not needed, and the controller tells the view to send the screen
+    user decides which sex to display (POST request)
+    controller analyses request
+    this time the model is needed, to fetch the data, so the controller tells it to do so
+    controller tells the view to send the output screen, using the data fetched by the model
+
+Mojavi splits an application into one or more modules. Each module has actions and views. So what happens is:
+
+    all user requests run through index.php; this does some initialisation and
+    instantiates the controller
+    controller analyses request; if the request specifies a specific module/action, that action is performed; if not, a default is performed. The action
+        is validated
+        executes any data logic
+        passes the result to the appropriate view
+    the view renders output to browser
+
+So actions are not an exact match to MVC's model: they may involve data processing, they may not.
+
+Now we know the theory, let's move on to practice and set up our application.
+Setting up the application
+Look in your config.php and you will see a definition of a default module and action. As supplied, these are set to 'Default' and 'DefaultIndex' respectively. Under that you will see the 'page not found' module and action. If this looks familiar to you, it's what you saw when you tried to run Mojavi before. Because you didn't specify a module/action in your request, it tried to use Default/DefaultIndex; it didn't find that, so it then tried to use Default/PageNotFound - but didn't find that either, so gave up.
+
+Look in Mojavi's documentation, under naming conventions, and you will see that Mojavi has strict requirements on where modules/actions are. So, within your application directory (where you put config.php), create a directory called 'modules'. In 'modules' create another directory for your default module; if this is defined as 'Default' in config.php, it should be called 'Default'. Within that, create 3 further directories, called 'actions', 'templates' and 'views'.
+
+Now to set up the first action, template and view. Put the following in DefaultIndexAction.class.php in actions/
+
+<?php
+class DefaultIndexAction extends Action
+{
+    function getDefaultView (&$controller, &$request, &$user)
+    {
+        return VIEW_SUCCESS;
+    }
+
+    function getRequestMethods ()
+    {
+        return REQ_NONE;
+    }
+}
+?>
+
+Just pause to note that all actions extend the Action class. Then put the following in templates/template.php
+
+<div>
+    Hello World
+</div>
+
+and put the following in views/DefaultIndexView_success.class.php
+
+<?php
+class DefaultIndexView extends View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('template.php');
+        return $renderer;
+    }
+}
+?>
+
+Note again that all views extend the View class.
+
+Now try server.com/ again, and you should see 'Hello World'. So, what's going on here? Let's look at Mojavi's processing of requests in more detail:
+
+    the controller analyses the request to find out what module/action is requested and which is the request method (GET or POST) (more precisely, it instantiates a Request object, which contains the relevant logic/properties)
+    the action is then processed (the logic for processing actions is actually in the execute method of ExecutionFilter, but we'll ignore these details for the moment, and pretend it's the controller doing it directly).
+    the first question is: does the action handle this type of request? To determine this, it calls getRequestMethods on the action and compares the return with the current request method.
+    If the action does not handle this type of request, it calls getDefaultView on the action, which returns the name of the default view.
+    If it does handle this type of request, it validates the input by calling the validate method, and, if there's no error, executes the action by calling the execute method. Whatever happens, the action returns an appropriate viewname.
+    So, in both cases, the controller will receive a viewname and looks for a view corresponding to this according to the naming conventions - views/<module><action>View_<viewname>.class.php - and runs its execute method
+    this returns a renderer object, the execute method of which is now run. This is what actually renders the content to the browser.
+
+In our particular case:
+
+    the controller finds no module/action is specified, so it runs the default. Default is defined in config.php as Default/DefaultIndex, so it looks for modules/Default/actions/DefaultIndexAction.class.php
+    the request method is a GET, but in this action, getRequestMethods returns NONE, so there is no match and the action does not handle this request method.
+    So it runs getDefaultView, which returns VIEW_SUCCESS.
+    So it looks for views/DefaultIndexView_success.class.php and runs its execute method
+    This method instantiates a renderer and sets the template to 'template.php'
+    The controlling logic then renders this template to the browser by running renderer::execute.
+
+Now let's take this a bit further: try server.com/?module=Default&action=DefaultIndex. You get the same response, as here you are specifying which module and action to use in the request - which just happen to be the same as the default you've just set up. Now try requesting an action you haven't set up, such as server.com/?module=Default&action=Default. You get the pagenotfound error again, so let's set up an error page. You can probably guess how to do this:
+
+    create an action called PageNotFoundAction.class.php identical to the default one except that the class is called PageNotFoundAction
+    create a view called PageNotFoundView_success.class.php identical to the default one except that the class is called PageNotFoundView and the template file is set to 'page_not_found.php'
+    create a template called page_not_found.php identical to the default one except it displays 'page not found' instead of 'hello world'
+
+Now try requesting your non-existent action again. Gerrit? Gorrit! Good!
+
+You may think this is rather inefficient having a separate template file for each text; if so, you'd be right. So let's use variables in the template instead. Take your template.php and change it to:
+
+<div>
+    <?= $template['message']?>
+</div>
+
+then add the following line to your default view, just before the return in the execute method:
+
+       $renderer->setAttribute('message', 'Hello World');
+
+Now request the default page again. In other words, the renderer setAttribute method sets a variable (in the array $template) to 'Hello World', and you can refer to this in your template. [You will, of course, notice that it is using the short form of variable setting, so will only work if this is enabled in your php setup.]
+
+Now also change your PageNotFound view to use template.php and set message to 'Page Not Found'. Then you can delete page_not_found.php.
+User input
+So, if that's all clear, we can move on to the next step: having the user define in the request what the message should be instead of having it hard-coded into the view.
+
+Leave the template as it is: displaying template['message']. In the view, replace the setAttribute line with:
+
+       $renderer->setAttribute('message', $request->getParameter('message'));
+
+in other words, instead of using a set phrase, we use what is being entered in the message parameter of the request, which is stored in the request object and can be retrieved with the getParameter method.
+
+Now run server.com/?message=hi (or any other message that takes your fancy), and it should now be displayed.
+
+Now we're ready to create the input screen for our little application. Remember we have two separate requests: the inital GET request for the default input screen, and the posting of the selection criteria. This isn't a tutorial for webpage design, so we'll create something very simple. Put the following in your templates directory, let's call it select.php:
+
+<html>
+<head>
+<title>Children Display</title>
+</head>
+<body>
+<h3>Children Display</h3>
+Please select whether you want to display boys or girls or both
+<form method=POST action="?module=Default&action=Display">
+<input name="sex"  type="radio" value="g">Girls<br>
+<input name="sex"  type="radio" value="b">Boys<br>
+<input name="sex"  type="radio" value="a">Girls and Boys<br>
+<input type="submit" name="submit" value="Submit" />
+</form>
+</body>
+</html>
+
+and change your DefaultIndexView to use this template. Now if you request server.com/ you should get this form. Note that this form posts to the Display action; as we haven't created that yet, if you press submit, you should get your error page.
+
+As the next step, let's set up the Display action; for the moment we'll just display the user's choice, as we know how to do that. So, create your DisplayAction and your DisplayView_success which will look something like:
+
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('template.php');
+        $renderer->setAttribute('message', $request->getParameter('sex'));
+        return $renderer;
+    }
+
+and you should see 'g', 'b' or 'a' displayed.
+Incorporating the model
+Up till now we have been bypassing the model/data, so it's high time we took a look at that. Remember that, when we looked at how Mojavi processes requests, we said it first uses the action's getRequestMethods to find out which types it handles. We used 'REQ_NONE' to bypass the model, but now we want it to handle POST requests, so we'll change getRequestMethods in DisplayAction to return REQ_POST. Now it will handle POSTs but if it receives a GET, it will still call getDefaultView, so, as this is wrong (we shouldn't receive GETs for this action), let's change getDefaultView to return VIEW_ERROR. Now set up the view for this, DisplayView_error.class.php: much the same as PageNotFound view but let's give it a different message:
+
+<?php
+class DisplayView extends View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('template.php');
+        $renderer->setAttribute('message', 'Stop wasting my time');
+        return $renderer;
+    }
+}
+?>
+
+Now try using the Display action in a get: server.com/?module=Default&action=Display and you should get the error message.
+
+Right then. If it receives a POST, it runs the execute method, so we have to add that. Stick the following in your DisplayAction:
+
+    function execute (&$controller, &$request, &$user)
+    {
+        print 'ok';
+        return VIEW_SUCCESS;
+    }
+
+As a first step, we don't actually do anything, just print 'ok' so you can see that it's going through the execute function. Now go back to the entry screen, pick your favourite sex, and press submit. You should now see 'ok'. Clear? Execute prints 'ok' and then returns VIEW_SUCCESS to the controller, which runs DisplayView_success::execute.
+
+Now let's define our children. 'At last!' I hear you cry. We'll do it simply: the data, that is, the list of children, are stored in arrays in the action; each array consists of a subarray of name and y/n indicating whether or not prize-winner. So replace the action's execute function with something like:
+
+    function execute (&$controller, &$request, &$user)
+    {
+        $boys = array(array('harry','n'), array('george','y'), array('bert','n'));
+        $girls = array(array('sue','n'), array('ann','n'), array('mary','y'));
+        switch ($request->getParameter('sex')) {
+        case 'b':
+           $request->setAttribute('boys', $boys);
+           break;
+        case 'g':
+           $request->setAttribute('girls', $girls);
+           break;
+        case 'a':
+           $request->setAttribute('boys', $boys);
+           $request->setAttribute('girls', $girls);
+           break;
+        }
+        return VIEW_SUCCESS;
+
+Depending on which sex has been requested, the function uses setAttribute in the request object to store the appropriate array of names.
+
+Now set up a new template for displaying the list of children; let's call it children.php:
+
+<html>
+<head>
+<title>List of Children</title>
+<style type="text/css">
+.boy { color: blue }
+.girl { color: red }
+</style>
+</head>
+<body>
+<div>
+    <b>Name (this year's prize-winners are marked with * !)</b><br>
+    <?= $template['children']?>
+</div>
+</body>
+</html>
+
+As you can see this uses the children template variable, and establishes two style classes for boys and girls to determine the colour. Finally, we change our DisplayView_success execute function to something like this:
+
+    function & execute (&$controller, &$request, &$user)
+    {
+      $renderer =& new Renderer($controller, $request, $user);
+      $renderer->setTemplate('children.php');
+// set up array of children
+// process each boy in array, adding 'boy' to end of array
+      if ($request->getAttribute('boys'))
+        foreach ($request->getAttribute('boys') as $boy)
+        {
+           array_push($boy, 'boy');
+           $children[] = $boy;
+	}
+// process each girl in array, adding 'girl' to end of array
+      if ($request->getAttribute('girls'))
+        foreach ($request->getAttribute('girls') as $girl)
+        {
+           array_push($girl, 'girl');
+           $children[] = $girl;
+        }
+// children in alpha sequence
+      sort($children);
+      $output = '';
+// process each child in array
+      foreach ($children as $child)
+      {
+// if second element is 'y', child is a prize-winner; display as '*'
+         $prize = '';
+         if ($child[1] == 'y')
+              $prize = '*';
+// add each child's name to output
+         $output .= "<div class=\"$child[2]\">$child[0] $prize</div>";
+      }
+      $renderer->setAttribute('children', $output);
+      return $renderer;
+    }
+
+First, the template is set to children.php. The boys and girls arrays passed from the action are combined in a $children array so they can be sorted. Then we set up the actual presentation logic: each child is put on a separate line in an output variable, with a * next to the name if they are a prize-winner, and wrapped in a div element with the appropriate style class. Finally, we set the children attribute on the renderer template to our output variable.
+
+Give it a whirl.
+
+Note the separation of concerns here. The model's task is to supply us with data; how it does that or how it stores the data is no concern of the view. The view's task to present the data as required: in alpha sequence with a * for each prize-winner; how it does that is no concern of the model.
+Templates or not?
+Whether to use templates or not is a frequent source of argument. HTML is simply a markup language; it contains no statements for applying presentation logic. The most commonly needed logic elements are do-loops so that lists are all presented in the same way (as with our children example), and if-else so different pieces of data can be presented differently (as with the boys/girls colour differentiation). To some extent, you can use stylesheets (CSS) to handle this, but CSS cannot handle all presentation logic and in any case at the moment browsers do not apply it consistently or completely.
+
+So there are 2 other main approaches to handling this on the server rather than the browser, both of which can easily be used in PHP. One is to combine logic and html in the same process (the approach used, for example, by XSLT). This is however hard to read (even experts take a while to work out what an XSLT file is actually going to output), so another approach is to separate the two: put the HTML markup in one file with holders for the data to which the markup should be applied, and then have a separate program which puts the data in the appropriate holders and then sends the result to the browser. An advantage of this is that non-technical people can use one of the numerous HTML editors to design the page layout and create the template, leaving programmers to do all the techy stuff.
+
+As supplied, Mojavi seems to favour templating, using plain PHP statements, though you can use one of the numerous templating engines as your renderer if you prefer (Smarty and SmartTemplates are provided in opt/renderers). However, this does not affect the underlying MVC framework: MVC is about separating data processing (model) from presentation (view), not, as is sometimes thought, about separating logic from HTML markup (not surprising, as HTML did not exist when MVC was invented).
+
+As you can see, my example uses a hybrid approach: it uses a template for the basic HTML with CSS for stylistic differentiation, and the presentation logic (ifs and do-loop) in the view, but the view contains some HTML markup, albeit the stylistically neutral <div>.
+Validation
+Let's just add some basic validation of the input data. Action provides two methods for this: registerValidators and validate.
+
+Mojavi provides some standard input validators which can be used with the registerValidators method. A simple check to add is that a parameter must be present in the request - it is required. For this, there is a method in ValidatorManager called setRequired. To use it, you add something like:
+
+    function registerValidators (&$validatorManager, &$controller, &$request, &$user)
+    {
+        $validatorManager->setRequired('sex', TRUE, 'I need sex; I cannot continue without sex');
+    }
+
+to the action. As you can see, the method has three parameters: which request parameter to check, status (TRUE means 'is required'), and the error message if not present.
+
+If the request passes the validation, the process carries on to the execution method; if not, control passes to the error page (which we set up before). In fact, what happens is that the handleError function is called; we haven't defined that, so the function inherited from Action is used: this returns VIEW_ERROR. Normally, you can just use that, but should you want a particular error page used for a particular action, you could override it in the action.
+
+We can test this validation by calling our initial display screen again and pressing submit without selecting an option (none of them is preselected). You should now see the error page we set up earlier; however, it is displaying a fixed text, not the error message. To display this, we need to set it up in the view. As you can probably guess, the error message is stored in the request object; in fact, there can be more than one, so they're stored in an array, which can be retrieved with the getErrors function (a specific error can be retrieved with getError).
+
+So edit DisplayView_error.class.php again, and replace the execute function with something like this:
+
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('template.php');
+        $errors = implode('<br>', $request->getErrors());
+        $message = "Invalid input<br>$errors";
+        $renderer->setAttribute('message', $message);
+        return $renderer;
+    }
+
+Now go back and press submit again and this time you should see the tailored error page.
+
+Various validator classes are supplied with Mojavi in opt/validators. Let's try ChoiceValidator, which checks that the parameter is one of a list of options. We want to check that sex is 'g', 'b' or 'a'; it may not be anything else.
+
+    function registerValidators (&$validatorManager, &$controller, &$request,
+                                 &$user)
+    {
+        $validatorManager->setRequired('sex', TRUE, 'I need sex; I cannot continue without sex');
+
+        require_once(VALIDATOR_DIR . 'ChoiceValidator.class.php');
+        $validator =& new ChoiceValidator($controller);
+// ChoiceValidator validates against a list of allowed values
+        $criteria = array('sensitive' => TRUE, 'choices' => array('b', 'g', 'a'));
+        $validator->initialize($criteria);
+// register the parameter field you want to validate        
+        $validatorManager->register('sex', $validator, TRUE);
+    }
+
+We set up the criteria using the initialize method, and then pass this validator to the validatorManager together with the request parameter to be validated.
+
+As this is hard to test without fiddling around, simply change one of the criteria, for example, change 'b' to 'c', then selecting girls should work whereas selecting boys should bring the error page.
+
+The second method, validate, is a free-form 'box' that can be used for any custom validation you like. The method inherited from Action simply returns TRUE, so we can override it in our action and return TRUE or FALSE as appropriate:
+
+    function validate (&$controller, &$request, &$user)
+    {
+        if ( . . . )
+	   return TRUE;
+    }
+
+where '. . .' is any logic you like. (Note you do not need to return FALSE if the condition is not met: as with the validators, if the method returns true, the execute method is executed, otherwise handleError is called, so it's sufficient to not return TRUE.) You can easily test this with a silly example: "if ('x' == 'x')" will be ok, "if ('x' == 'y')" will give the error page.
+Recap
+At first glance, Mojavi may seem complicated, but this simple tutorial should have shown that it's quite easy to use once you get the hang of it.
+
+    Mojavi provides classes with default methods which you override
+    the most important of these classes are Action and View
+    View has only one public method: execute, which contains the presentation logic
+    Action has 9 methods, 6 of which we have looked at here:
+        execute contains the model/data logic
+        getDefaultView defines which view to use if none is specified (default inherited from Action is VIEW_INPUT)
+        getRequestMethods defines which of GET and POST are valid for this action (default is GET and POST are both valid)
+        registerValidators, validate and handleError we looked at under validation (default for validate is TRUE (in other words, data is valid unless invalidated), for handleError VIEW_ERROR)
+    so, to set up your framework, you create your own classes to extend View and Action, and override the functions as necessary
+    naming conventions are strict: the system will not work if you don't adhere to them
+    the Controller object which coordinates all this is instantiated by index.php; all user requests to the framework go through index.php
+    the controller instantiates a Request object for each request; this request object can be used as the interface between action and view for variable storage, using setAttribute to set and getAttribute to get
+    validation uses Validator and ValidatorManager objects, which are instantiated by the controller, based on criteria set in the Action. ValidatorManager has 2 public methods: register and setRequired, both of which we looked at
+    rendering is performed by a Renderer object instantiated by the View, using HTML templates set up separately
+    in this tutorial, we set up:
+        3 actions: the initial DefaultIndex, the main Display, and PageNotFound
+        4 views: a success view to match each of the actions, plus an error for Display
+        3 display templates: one for the initial selection, one to display the list of children and a general-purpose message display template
