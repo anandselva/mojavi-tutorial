@@ -1,0 +1,425 @@
+Mojavi for Beginners: Part 3
+
+Action chains: combining actions
+Now let's say we want to display both teachers and children on the same screen. First we need to add another option to the default screen for the default module:
+
+<input name="choice"  type="radio" value="Both">Children and Teachers<br>
+
+Then we need to change the Select action: validation needs to accept 'Both'. As it stands, the execute function will forward to a Both module, but do we really need a separate module for that? All it would do is combine the actions for Children and Teachers into one. Let's simply create a new action in the Default module called DisplayBoth. First, we need to change execute in SelectAction:
+
+    function execute (&$controller, &$request, &$user)
+    {
+        if ($request->getParameter('choice') == 'Both')
+        {
+            $controller->forward(DEFAULT_MODULE, 'DisplayBoth');
+        }
+        else
+        {
+            $controller->forward($request->getParameter('choice'), DEFAULT_ACTION);
+        }
+        return VIEW_NONE;
+  }
+
+so it handles 'Both' differently. Now let's set up DisplayBothAction. How do we combine existing actions in one process? This is what action chains are for; they perform the execute of the logic, storing the result in a variable where it can be fetched:
+
+<?php
+class DisplayBothAction extends Action
+{
+    function execute (&$controller, &$request, &$user)
+    {
+            $actChain =& new ActionChain; 
+            $actChain->register('children', 'Children', 'Display', array('sex' => 'a'));
+            $actChain->register('teachers', 'Teachers', 'Index'); 
+            $actChain->execute($controller, $request, $user); 
+            $request->setAttribute('children', $actChain->fetchResult('children')); 
+            $request->setAttribute('teachers', $actChain->fetchResult('teachers')); 
+            return VIEW_SUCCESS;
+    }
+}
+?>
+
+ActionChain has 3 main methods: register: we pass in the name we want to use to refer to the action, the module and action names, plus an array of any parameters that are needed; execute; and fetchResult, using the reference name for the variable.
+
+Now we need a template:
+
+<div>
+    <?= $template['children']?>
+</div>
+<div>
+    <?= $template['teachers']?>
+</div>
+
+and a view:
+
+<?php
+require_once(LIB_DIR . 'Base_View.class.php');
+class DisplayBothView extends Base_View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $this->title = 'List of All Children and Teachers';
+        $this->sub_template = 'both.php';
+        $this->sub_vars['children'] = $request->getAttribute('children');
+        $this->sub_vars['teachers'] = $request->getAttribute('teachers');
+        parent::execute($controller, $request, $user);
+        return $this->renderer;
+    }
+}
+?>
+
+So, in the action, we run the chain, fetch the results into attributes in the request object, and then access them in the view in the normal way.
+
+Run this, and you'll soon notice two problems: we can't access the teacher display unless we've logged in, so the 'result' fetched is actually the login screen; and, having spent the time putting the homepage link and the user info on every screen, we now find that we don't actually want them if the output forms part of a larger screen, that is, if the output is only one element of the total screen.
+
+The first one's easy to fix, by forcing authentication in the DisplayBoth action. If you can't remember how, go back to the section on authentication (hint: something to do with getPrivilege and isSecure, perhaps?). However, that still isn't entirely correct. We hard-coded a forward to the teachers display in the login action, so perhaps we should change that to go to the homepage instead. [Better design would of course be that it carried on after successful login to the page originally requested, but that entails passing hidden parameters with the form or using a separate frame or something, which isn't really what this tutorial is about.]
+View components
+The second problem is more complicated. The real problem is that the structure of our pages is not as simple as we thought at first: there's not just a main base part and a body; the body may be composed of one or more components. So we'll create another class called Component_View. This contains the logic common to components and the main screen, so we move that logic into it:
+
+<?php
+class Component_View extends View
+{
+    var $componentRenderer; // component renderer
+    var $componentTemplate;  // the name of the component's template file
+    var $componentVars; // array of the variables for the component/template
+    
+    function execute ($controller, $request, $user)
+    {
+        $this->componentRenderer = new Renderer($controller, $request, $user); 
+        $this->componentRenderer->setMode(RENDER_VAR);
+        $this->componentRenderer->setTemplate($this->componentTemplate);
+        $this->componentRenderer->setArray($this->componentVars);
+        $this->componentRenderer->execute($controller, $request, $user); 
+    }
+}
+?>
+
+Note that I have renamed sub_template and sub_vars to componentTemplate and componentVars; this means we have to change all the views to match, but makes naming more consistent.
+
+Now, how do we distinguish between the two modes, with Base and without? We could create two views for each existing view, one inheriting from Base and the other from Component, but that's an awful lot of duplication, so we'll use a switch instead. Change the actionChange::register in the Both action to set an isComponent attribute, so execute looks like this:
+
+        $actChain =& new ActionChain; 
+        $actChain->register('children', 'Children', 'Display', array('sex' => 'a', 'isComponent' => TRUE));
+        $actChain->register('teachers', 'Teachers', 'Index', array('isComponent' => TRUE)); 
+        $actChain->execute($controller, $request, $user); 
+        $request->setParameter('isComponent', FALSE);
+        $request->setAttribute('children', $actChain->fetchResult('children')); 
+        $request->setAttribute('teachers', $actChain->fetchResult('teachers')); 
+        return VIEW_SUCCESS;
+
+(the setting of isComponent to FALSE after actionChain::execute is necessary because action chain does not reset the parameters in $request after each action in the chain).
+
+Base_View now inherits from Component_View, and we must change it so it runs Component_View::execute and then simply uses the componentRenderer as $renderer if this is a component:
+
+<?php
+require_once(LIB_DIR . 'Component_View.class.php');
+class Base_View extends Component_View
+{
+    var $title;  // page title
+    var $renderer; // main renderer
+    
+    function execute ($controller, $request, $user)
+    {
+// set up sub-template
+        parent::execute($controller, $request, $user);
+        if ($request->getParameter('isComponent'))
+// return componentRenderer if component            
+            $this->renderer =& $this->componentRenderer;
+        else
+        {
+// set up main template if not a component
+            $this->renderer = new Renderer($controller, $request, $user);
+            $this->renderer->setTemplate('main.php');
+            $this->renderer->setAttribute('title', $this->title);
+            $this->renderer->setAttribute('error', $request->getError('login'));
+            $this->renderer->setAttribute('body', $this->componentRenderer->fetchResult($controller, $request, $user)); 
+// homepage link       
+            $this->renderer->setAttribute('homelink', '<a href="?module='.DEFAULT_MODULE.'&action='.DEFAULT_ACTION.'">Homepage</a>');
+// user data section       
+           if ($user->isAuthenticated())
+                $this->renderer->setAttribute('userdata', 'User: ' . $user->getAttribute('username') . ' <a href="?module='.DEFAULT_MODULE.'&action=Logout">Logout</a>');
+           else
+           {
+                $this->renderer->setAttribute('userdata', '<a href="?module='.DEFAULT_MODULE.'&action=Login">Login</a>');
+           }
+        }
+    }
+}
+?>
+
+Try it out. Does it work? Amazing!
+
+Back in the Streamline, Optimise, Refactor section, when we set up the main template, you may have thought it would have been much simpler to just have <? include $template['component']; ?> instead of <?= $template['body']?>, and set the component attribute to the name of the template you want to include. That's true, but there is another advantage to using a variable: you are not forced to have a template at all. We have it so that a component can be rendered on its own and stored in a variable; we also can have a Base_View with components; so what about having a Base_View without any components, that is, without a sub-template? If you find you need a template that just contains <div><?= $template['content'];?></div> this is pretty pointless - you might just as well put that in the view and save some filesystem access. So let's change the process so that a view can store its content in an object variable and just put that in the base template without any sub-template being necessary. Let's use a noComponent switch to do that. Base_View now has 2 extra variables:
+
+    var $noComponent; // TRUE if there is no component template (body)
+    var $body; // contains body content if there is no component template
+    
+    function execute ($controller, $request, $user)
+    {
+// set up component if there is a component template
+        if (!$this->noComponent)
+            parent::execute($controller, $request, $user);
+
+and only runs Component_View::execute is there is a component template to render. We also have to change the logic where it sets the body attribute:
+
+        if ($this->noComponent)
+            $this->renderer->setAttribute('body', $this->body);
+        else
+            $this->renderer->setAttribute('body', $this->componentRenderer->fetchResult($controller, $request, $user)); 
+
+A sample view might look like this:
+
+    function & execute (&$controller, &$request, &$user)
+    {
+        $this->title = 'Sample with no Sub-template';
+        $this->noComponent = TRUE;
+        $this->body = '<div>' . $request->getAttribute('content') . '</div>';
+        parent::execute($controller, $request, $user);
+        return $this->renderer;
+    }
+
+Tidying up the display: logins and standard errors
+Let's change it so we have a login prompt at the bottom of the page instead of a link to the login page. We'll continue to use login.php but, as it can appear on any page, we'll move it to the global templates directory. It now looks like this:
+
+<form method=POST action="?module=Default&action=Login">
+Login: <input type="text" name="username" maxlength="25" value="<?= $template['username'];?>"/>
+<input type="submit" name="submit" value="Submit" />
+</form>
+
+To use this we need to replace
+
+      $this->renderer->setAttribute('userdata', '<a href="?module='.DEFAULT_MODULE.'&action=Login">Login</a>');
+
+with another renderer component:
+
+// set up login sub-template
+     $loginRenderer = new Renderer($controller, $request, $user); 
+     $loginRenderer->setMode(RENDER_VAR);
+     $loginRenderer->setTemplate('login.php');
+     $loginRenderer->setAttribute('username', $request->getParameter('username')); 
+     $loginRenderer->execute($controller, $request, $user); 
+     $this->renderer->setAttribute('userdata', $loginRenderer->fetchResult($controller, $request, $user));
+
+Let's also make a standard error line display at the bottom of the page:
+
+<div class="error">
+    <b><?= $template['errors'];?></b>
+</div>
+
+setting it in Base_View; there may of course be more than 1 error:
+
+            $errors = $request->getErrors();
+            $erroroutput = '';
+            foreach ($errors as $k => $v)
+                $erroroutput .= "<br>$k: $v";
+            $this->renderer->setAttribute('errors', $erroroutput);
+
+Now, if you go to the initial default screen and don't pick any option, validation will set up the error and it will be displayed at the bottom of the screen. This means though that View_error really serves no purpose any more, so we can get rid of it. Go to the SelectAction and add a handleErrors function to define what should happen in the case of an error. We could use a forward (actually, back ;-) to the default homepage:
+
+    function handleError (&$controller, &$request, &$user)
+    {
+        $controller->forward(DEFAULT_MODULE, DEFAULT_ACTION);
+        return VIEW_NONE;
+    }
+
+but there is another shortcut we can use instead: the viewname you return can be an array of module/action/view and we can simply use the default homepage view instead. The default homepage does not need any data, so the error-handling looks like this:
+
+    function handleError (&$controller, &$request, &$user)
+    {
+        return array(DEFAULT_MODULE, DEFAULT_ACTION, VIEW_SUCCESS);
+    }
+
+If it seems a bit illogical that an error should use something called VIEW_SUCCESS, you can change this. 6 view names are provided (VIEW_ALERT, _ERROR, _INDEX, _INPUT, _NONE, _SUCCESS) but you can use any name you like; if your action returns 'nudes' it will use View_nudes. I only used SUCCESS because it sounds good :-) but perhaps the most appropriate here would be the more neutral INDEX. So you could rename DefaultIndexView_success to DefaultIndexView_index, but then you would have to change all the other returns of VIEW_SUCCESS too.
+
+View_error is still used by getDefaultView but that's only for the case that someone tries with GET rather than POST, so if we change that to VIEW_NONE then they just get a blank page - serve 'em right!
+
+In the same way, Children DisplayAction can be changed to
+
+        return array($controller->getCurrentModule(), 'Index', VIEW_SUCCESS);
+
+if there's an error, and that View_error can be deleted as well. Ditto GlobalSecure and even PageNotFound, where we might as well display which page could not be found:
+
+    $request->setError('Page not found', $request->getParameter(MODULE_ACCESSOR) . '/' .  $request->getParameter(ACTION_ACCESSOR));
+
+Now that we have a login prompt on every page, LoginView isn't serving much purpose either, so let's send any errors to the home page with an appropriate message, and get rid of that too. This simplifies LoginAction:
+
+<?php
+class LoginAction extends Action
+{
+    function execute (&$controller, &$request, &$user)
+    {
+        $username = $request->getParameter('username');
+        if ($username)
+        {
+            $teachers = array(array('smith','maths'), array('jones','science'), array('miller','history'));
+            foreach($teachers as $teacher)
+              if ($username == $teacher[0])
+              {
+// valid username
+              $user->setAuthenticated(TRUE);
+// if this is a history teacher, add privilege           
+              if ($teacher[1] == 'history')
+                     $user->addPrivilege('history', 'tutorial');
+              $user->setAttribute('username', $username);
+              }
+        }
+
+// invalid        
+        if (!$user->isAuthenticated())
+            $request->setError('login', 'Invalid username');
+
+// in all cases go to homepage                        
+        return array(DEFAULT_MODULE, DEFAULT_ACTION, VIEW_SUCCESS);
+    }
+}
+?>
+
+This all means that the template message.php is now no longer used and can be deleted.
+Setting up a database
+When setting up user authentication, we simply put the array of teachers in the login action and said we would 'refine' this later. This really breaks all the rules: data belonging to one data model stored in a different one - yuk! What we need of course is a separate database where the teachers are stored; this database would be maintained via the teachers module/model, and accessed by the login action. In the real world, this would probably be in some sort of separate RDBMS with its own access methods, but to keep matters simple we'll put it in a basic text file.
+
+So, put this in BASE_DIR/teachers:
+
+smith,maths,
+jones,science,
+miller,history,
+
+and we'll access it using Teachers.class.php:
+
+<?php
+class Teachers
+{
+    function getTeachers ()
+    {
+        $teacherFile = file(BASE_DIR . 'teachers');
+        foreach ($teacherFile as $teacherRec)
+            $teachers[] = explode(',', $teacherRec);
+        return $teachers;
+    }
+}
+?>
+
+Put this in LIB_DIR; as you can see, it returns an array in exactly the same format as the previous one. If you had a separate DB system, it would probably be somewhere outside our Mojavi framework, so we'll use another feature of Mojavi - that every module can have its own config.php - to determine where the DB classes are stored. Stick this in config.php in modules/Teachers and modules/Default:
+
+<?php
+    if (!defined('DB_DIR'))
+        define('DB_DIR', LIB_DIR);
+?>
+
+and we'll use DB_DIR in our db access routines. Now modify Teachers IndexAction to access this routine instead of an array:
+
+        require_once(DB_DIR . 'Teachers.class.php');
+        $teachersDB = new teachers;
+        $teachers = $teachersDB->getTeachers();
+//        $teachers = array(array('smith','maths'), array('jones','science'), array('miller','history'));
+
+Check it works. Assuming it does :-) make exactly the same change to Default/LoginAction. Check that works too.
+Action initialization
+If this were a proper RDBMS, there would probably be some logic common to all DB actions, such as connecting to the DB. To incorporate this, you can use another function of the Action class that we haven't looked at yet: initialize. In our case, we don't actually have any connecting to do, so we'll introduce a dummy routine that just displays a message. Add this to Teachers IndexAction:
+
+    function initialize ()
+    {
+        print 'connecting to db . . .';
+        return TRUE;
+    }
+
+and try again. Of course, if this were a real routine, it would check the function worked ok, and trigger an error if not. You could add this function to Default LoginAction as well, but more efficient is to create a parent class, say DBAction, with initialize in it, and extend that: LoginAction extends DBAction extends Action. Any actions with DB access in them would then extend DBAction not Action.
+
+Now try displaying teachers without being logged in. It displays the connecting message twice. Why's this? Because it's creating 2 objects, one for login and the other for teachers and executes initialize for each of them. So we'll have to set a switch to stop it executing more than once:
+
+    function initialize (&$controller, &$request, &$user)
+    {
+        if (!$request->hasAttribute('initialized'))
+        {
+            $request->setAttribute('initialized', TRUE);
+            print 'connecting to db . . .';
+        }
+        return TRUE;
+    }
+
+Filters
+Filters enable you to process or alter the input request or the output response in some standard way before and/or after the action/view rendering. They are typically used for encryption, (un)compression, format conversion and similar tasks. You can set them up on a global and/or module level, so they run either before/after every action or only those in a particular module. For the module level, you create a file called moduleFilterList.class.php where module is the module name; for example, in our Teachers module it would be called TeachersFilterList.class.php. At the global level it is BASE_DIR/GlobalFilterList.class.php.
+
+There are 3 parts to it; filters, filter lists and filter chains. A filter list (either Global or module) registers the filters listed in it with a filter chain; the filter chain is executed as part of the action execution process. A sample GlobalFilterList would look like this:
+
+<?php
+class GlobalFilterList extends FilterList
+{
+    function registerFilters (&$filterChain, &$controller, &$request, &$user)
+    {
+        require_once( BASE_DIR . 'filters/UserFilter.class.php' );
+        $filterChain->register(new UserFilter);
+    }
+}
+?>
+
+All FilterLists extend FilterList, and have one method: registerFilters. You can register any number of filters in the FilterChain, each of which can have extensive pre- and/or post-processing logic. This one registers one Filter called UserFilter, which is in the filters directory at the BASE_DIR level. UserFilter.class.php might look like this:
+
+<?php
+class UserdataFilter extends Filter
+{
+    function execute (&$filterChain, &$controller, &$request, &$user)
+    {
+// pre-filter goes here
+       print ' before ';
+// execute the next filter in the chain
+       $filterChain->execute($controller, $request, $user);
+// post-filter goes here
+       print ' after ';
+    }
+}
+?>
+
+All Filters extend Filter and have one public method: execute. In this execute, you write your pre-action logic, you then execute the FilterChain, and then write your post-action logic, in other words, the filter is wrapped around the execute of the next filter in the chain. It is essential that every filter contains FilterChain::execute, as otherwise the next filter in the chain will not be executed.
+
+Is this clear? Remember at the beginning, when we were still doing Hello World, I said that actions were actually run in ExecutionFilter? Well, this is why: an ExecutionFilter is a filter that executes the action. The controller:
+
+    1. instantiates FilterChain
+    2. runs mapGlobalFilters: if GlobalFilterList.class.php exists, run its registerFilters, i.e. add the filters to the filterChain
+    3. runs mapModuleFilters (ditto for module)
+    4. registers ExecutionFilter in the filterChain, so it is the last in the chain
+    5. runs filterChain::execute which executes the first filter in the chain
+    6. because each filter contains the execute of the next filter, this means that it runs first all the pre-action logic, then the action (ExecutionFilter), then all the post-action logic in reverse order, so if you have 3 filters, each with pre- and post-logic, it runs: pre 1, pre 2, pre 3, action, post 3, post 2, post 1. See the diagram.
+
+If you create these files and try calling various pages again, you should see 'before' and 'after' in the appropriate place. Register the filter 2 or 3 times and you should see the displays 2 or 3 times; add a moduleFilterList and generally play around until it's clear.
+
+The filter logic is run from controller::forward, so if the action execute contains a forward, the filters will be run twice. To prevent this, check whether the filter has already been registered, for example, using a static variable:
+
+    function execute (&$filterChain, &$controller, &$request, &$user)
+    {
+        static $registered;
+
+        if ($registered == NULL)
+        {
+            $registered = TRUE;
+// pre-filter goes here
+             print ' before ';
+// execute the next filter in the chain
+             $filterChain->execute($controller, $request, $user);
+// post-filter goes here
+             print ' after ';
+        } else
+        {
+            $filterChain->execute($controller, $request, $user);
+        }
+    }
+
+Adding a second application
+Now let's say you want to add a second school to your system. The simplest way to do that is to copy your application directory; as supplied, this is called 'webapp'. For example, you could have 'school1' and 'school2'. Both webapps can of course use the same mojavi-all-classes and opt/, but each webapp will have its own index.php and config.php, so you will need to change the directory references in these to match the new setup. You can test by displaying the list of children in both webapps.
+
+Now change the teachers file so the names of the teachers are different, and then try logging on in both applications. You will notice that once you have logged in to one application, you are also logged in to the second, which is not correct. The reason for this is that, by default, Mojavi sets up the session cookie with the default path '/' and id PHPSESSID, so any session logic that uses those will think that the cookie applies to it. So we must tailorise the cookie settings. The simplest way to do this is to set the cookie path or id in config.php with one or both of the following:
+
+session_name('school1');
+session_set_cookie_params(0, 'path/');
+
+Then your applications should work independently.
+Various other bits and pieces
+
+    1. Logging: PHP's default is display_errors=on and error_reporting(E_ALL & ~E_NOTICE), though it's recommended to set display_errors=off for production environments. Mojavi sets error_reporting(E_ALL) (at the beginning of mojavi-all-classes) and you can override display_errors by changing the setting of DISPLAY_ERRORS in config.php. As supplied, Mojavi uses its own error handler (set at the beginning of controller::dispatch), which by default logs errors to stdout using a standard format. You can customise this: see index.php for some examples.<>
+    2. this tutorial uses standard GET format for requests (server.com/file.php?param1key=param1value&param2key=param2value) but you can also use PATH_INFO format (server.com/file.php/param1key/param1value/param2key/param2value) by changing URL_FORMAT in config.php (note this does not work by default on all servers). I prefer the GET format, as you can hide the filename if you use index.php (server.com/?params). Of course, if you have Apache mod_rewrite you can doctor the request, for example, server.com/pages/params (or even server.com/servlet/controller.jsp/params if you want to really confuse anyone trying to break into your system) can be changed to server.com/index.php/params
+    3. you can also use Mojavi as a page controller. Copy index.php to another file, and edit it so the dispatch call at the end passes module and action as parameters. For example, we could call our children module by creating children.php with $controller->dispatch('Children', 'Index'). Using this, there's no need to specify module/action in the query string; the user just requests children.php. You can refine this and create special scripts that set request parameters and/or attributes unseen by the user, for example $controller->request->setParameter('test', 'xyz'). You must set these after the Controller::getInstance call and before dispatch.
+    4. AVAILABLE in config.php is defined as TRUE by default. Set this to FALSE and the UNAVAILABLE module/action will be used. So you can take the site down for maintenance etc, and users will be given a set action/view until AVAILABLE is changed back to TRUE.
+
+Other features not described here
+
+    1. custom session handling, for example in a RDBMS. See index.php. As supplied, USE_SESSIONS is defined as TRUE in config.php
+    2. custom authorisation; see OPT_DIR/auth and user

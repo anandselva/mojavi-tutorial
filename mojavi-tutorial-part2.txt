@@ -1,0 +1,449 @@
+Mojavi for Beginners: Part 2
+
+Multiple Data Models
+Of course, our school does not have only children; it also has teachers. Let's say we have a list of them which we want to display as well, similarly to the children; teachers also have names, and let's say that they have a subject they teach instead of a prize. This means we must add a new initial screen, so the user can select whether to display children or teachers. Go back to MVC: the model part of MVC handles this by having different models for the different data objects, which can be managed differently as needed; the view may also differ. Similarly, in Mojavi, we have different modules which can have different actions and views as needed.
+
+So, we now need a children module and a teachers module, and we must change the Default module so it presents the user with a screen to select children or teachers. The easiest way to create the new modules is to copy Default in the modules directory to new modules called, say, Children and Teachers. You can test that these work by requesting, for example, server.com/?module=Children&action=DefaultIndex. Children we can leave largely as is, though we do not need PageNotFound in there, as that is handled by Default (as defined in config.php, remember?). And there is an advantage to renaming DefaultIndex to Index: if you do not define an action in the request it tries to use 'Index' for that module, so you can request for example server.com/?module=Children and it will give you Children/Index if present.
+
+And we must modify teachers. Let's leave out the selection on this: we always want to display all teachers. So we can adapt the Display action, view and template from Children to form Index for Teachers.
+
+Start with the template: we can adapt children.php and call it teachers.php:
+
+<html>
+<head>
+<title>List of Teachers</title>
+<style type="text/css">
+.boy { color: blue }
+.girl { color: #red }
+</style>
+</head>
+<body>
+<h3>List of Teachers</h3>
+<div>
+    <b>Name and subject</b><br>
+    <?= $template['teachers']?>
+</div>
+</body>
+</html>
+
+or something similar. We do not need select.php as there is no selection.
+
+With actions, we can remove PageNotFound, and we can adapt Display for Index:
+
+<?php
+class IndexAction extends Action
+{
+    function execute (&$controller, &$request, &$user)
+    {
+        $teachers = array(array('smith','maths'), array('jones','science'), array('miller','history'));
+        $request->setAttribute('teachers', $teachers);
+        return VIEW_SUCCESS;
+    }
+    
+    function getDefaultView (&$controller, &$request, &$user)
+    {
+        return VIEW_ERROR;
+    }
+
+    function getRequestMethods ()
+    {
+        return REQ_POST;
+    }
+}
+?>
+
+There isn't anything to validate, so execute just sets up the teachers request attribute.
+
+By now, you should know how to set up IndexView:
+
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('teachers.php');
+        $teachers = $request->getAttribute('teachers');
+        $output = '';
+        foreach ($teachers as $teacher)
+        {
+            $output .= "<div class=\"teacher\">$teacher[0] $teacher[1]</div>";
+        }
+        $renderer->setAttribute('teachers', $output);
+        return $renderer;
+    }
+
+The other views aren't needed.
+Request forwarding
+Now let's look at Default. For templates, we can keep template.php for errors, plus the select template. We don't need children.php. So put something like this in templates/select.php:
+
+<html>
+<head>
+<title>School Display</title>
+</head>
+<body>
+<h3>School Display</h3>
+Please select whether you want to display children or teachers
+<form method=POST action="?module=Default&action=Select">
+<input name="choice"  type="radio" value="Children">Children<br>
+<input name="choice"  type="radio" value="Teachers">Teachers<br>
+<input type="submit" name="submit" value="Submit" />
+</form>
+</body>
+</html>
+
+Much the same as our previous Default select, only this time we post to action=Select. The Index action and view, after renaming, can stay as they are, so all we need do is test with server.com/.
+
+On the actions, we can use PageNotFoundAction as is. But we need a Select action, for which we can adapt Children's Display action. We might as well leave the validation in there as before, only tailored to the 'choice' parameter, which can be 'Children' or 'Teachers'. I'll leave you to sort that out (don't forget that the action class name must be changed to match the filename). But what should be in the execute function? All we want it to do is to redirect to the appropriate module based on the choice parameter. For this, the controller has a forward function:
+
+    function execute (&$controller, &$request, &$user)
+    {
+        $controller->forward($request->getParameter('choice'), 'Index');
+        return VIEW_NONE;
+    }
+
+which takes 2 parameters: module (as specified in the choice parameter, which we cleverly set up in the form to match the module name), and action (which we set to 'Index'). We return VIEW_NONE as processing returns after the forward and the controller will try and render the view if we don't.
+
+On the views, we can leave PageNotFound as is and use Display for Select (again, don't forget the class name must be changed). We do not need DisplayView_success, as this action doesn't display anything, though we need SelectView_error if validation fails.
+
+Now test it all through. A problem you will notice is that children select no longer works: it always brings 'page not found'. Examine the template and you will see why: the post action is still Default/Display, which doesn't exist any more. We could simply change 'Default' to 'Children', but let's do it more intelligently by setting the post action in the view: put a variable setting in the template, such as:
+
+<form method=POST action="<?=$template['selectAction']?>">
+
+and use the view to set it. Now here's something that might catch you out: you could use Request::getParameter('module') but this will return 'Default' because we used Controller::forward to redirect to the Children module and the parameters will not be changed by forward. Instead we must get the current module from the controller object; fortunately it has a method that does just that, so add something like the following to the view:
+
+        $module =& $controller->getCurrentModule();
+        $renderer->setAttribute('selectAction', "?module=$module&amp;action=Display");
+
+That should make everything work correctly again.
+Global templates
+You will notice that we have an identical template.php in every module. This is not very efficient, so let's replace that with one global template for all modules. The logic for finding templates is rather complicated: at the front of mojavi-all-classes, you will see TEMPLATE_DIR is defined as BASE_DIR/templates/. Then Renderer::execute is where the rest of the logic is:
+
+    you can define your template file with an absolute path; if so, this is used
+    you can also define a template directory with Renderer::setTemplateDir; if so it uses that, otherwise uses module/templates as the templateDir
+    if the template isn't found there, it tries TEMPLATE_DIR
+    and if that fails, it gives up
+
+So, we can either define the file with an absolute path in the view and save some file access; or, more flexibly, create a directory 'templates' at the BASE_DIR level. Let's do the latter, and move our template.php to it; as the name isn't very descriptive, let's rename it message.php. Of course, if we do that, we have to change the name in all the views that use it. Now generate an error and check that it works.
+User authentication
+Let's say we want to change our little application so that only teachers can see the list of teachers. We need two things to do this: we need to force teachers to identify themselves (log in), and we need to secure the teachers list action so that only users who are logged in as teachers can access it.
+
+Every time Mojavi runs, it instantiates a User object and, if USE_SESSIONS is defined in config.php as TRUE (which it is as supplied), a session is started/maintained (this uses cookies, so the usual caveats about cookies apply). There are 2 levels of security: a requirement that a user is authenticated (logged in), and an optional further requirement that they have authorisation to perform a particular action - a privilege. To enable this, the User object has 2 methods: setAuthenticated and addPrivilege.
+
+To secure an action, there are 2 further methods for an action. If isSecure is TRUE, then the user must be authenticated. getPrivilege requires an authenticated user to in addition have the privilege concerned.
+
+So, let's see how that works. Add the isSecure function to your teachers action:
+
+    function isSecure ()
+    {
+        return TRUE;
+    }
+
+Now try to display the teachers again: you get an error message about AUTH_MODULE and AUTH_ACTION. So, you've told the controller users must be logged in to access this page/action. It checks whether you are logged in, finds you aren't and looks in config.php for the login module/action. These are defined as Default and Login. So let's create those. As usual, we need a Login action, view and template:
+
+<?php
+class LoginAction extends Action
+{
+    function execute (&$controller, &$request, &$user)
+    {
+        $username = $request->getParameter('username');
+        if (!$username)
+           return VIEW_INPUT;
+        $teachers = array(array('smith','maths'), array('jones','science'), array('miller','history'));
+        foreach($teachers as $teacher)
+          if ($username == $teacher[0])
+          {
+// valid username
+            $user->setAuthenticated(TRUE);
+            $controller->forward('Teachers', 'Index');
+            return VIEW_NONE;
+          }
+
+        $request->setError('login', 'Invalid username');
+        return VIEW_INPUT;
+    }
+
+    function getDefaultView (&$controller, &$request, &$user)
+    {
+        return VIEW_INPUT;
+    }
+
+    function getRequestMethods ()
+    {
+        return REQ_POST;
+    }
+}
+?>
+
+<?php
+class LoginView extends View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $username = $request->getParameter('username');
+        if ($username == NULL)
+        {
+            $username = '';
+            $request->setError('login', '');
+        }
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('login.php');
+        $renderer->setAttribute('username', $username);
+        $renderer->setAttribute('error', $request->getError('login'));
+        return $renderer;
+    }
+}
+?>
+
+<html>
+<head>
+<title>School Display Login</title>
+</head>
+<body>
+<h3>School Display Login</h3>
+Please enter your username
+<form method=POST action="?module=Default&action=Login">
+<input type="text" name="username" maxlength="25" value="<?= $template['username'];?>"/>
+<input type="submit" name="submit" value="Submit" />
+<br><b><?= $template['error'];?></b>
+</form>
+</body>
+</html>
+
+Somewhat more complicated than the processes we've seen so far, this loops until the user enters a valid name. If we've been redirected from the DefaultIndex action, this will be a POST, so it's a handled method (GET will receive the DefaultView, VIEW_INPUT, so we allow entering Login in the url). There is no validation, so it calls execute. If there's no username, just return VIEW_INPUT. Otherwise, we just copy the same array of teachers from the other action (we'll refine this later), and compare with the name entered. If it matches, it runs user::setAuthenticated, and forwards to the Teachers module. If not, an error message is set and the input view is returned.
+
+You'll notice we're using View_input this time, and the POST action in that is to itself. So it loops until the user enters a valid name (or GETs another module/action). (Of course, a well-designed screen would have a Homepage link or other escape route.)
+
+That shows how to enforce authentication: you must be logged on to perform the action and view the page. Now to add a privilege. Let's say all teachers can log in, but only history teachers can view the list of teachers. Add this to the Teachers Index action:
+
+    function getPrivilege (&$controller, &$request, &$user)
+    {
+        return array('history', 'tutorial');
+    }
+
+The first element is the name of the privilege, the second is an optional namespace (default is org.mojavi), which we'll call 'tutorial'. Now try and list the teachers, and log in again. You will receive an error message from the PrivilegeAuthorizationHandler. You should be familiar with this sort of message by now: yes, look in config.php and you find SECURE_MODULE and SECURE_ACTION defined as Default/GlobalSecure. The controller has run the Teachers action, is told to get the 'history, tutorial' privilege, finds you don't have it, so goes to the secure module/action - which doesn't exist. So let's set up GlobalSecure:
+
+<?php
+class GlobalSecureAction extends Action
+{
+    function getDefaultView (&$controller, &$request, &$user)
+    {
+        return VIEW_SUCCESS;
+    }
+
+    function getRequestMethods ()
+    {
+        return REQ_NONE;
+    }
+}
+?>
+
+<?php
+class GlobalSecureView extends View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('message.php');
+        $renderer->setAttribute('message', 'You are not authorised to view this page. Press <a href="?module='.DEFAULT_MODULE.'&action='.DEFAULT_ACTION.'">here</a> to return to home page');
+        return $renderer;
+    }
+}
+?>
+
+Now if you log on, you should get this page. Note that here we forward to the constants defined in config.php - more flexible than hard-coding names in scripts.
+
+The final step is to give history teachers the historyTeacher privilege: add this to the Login action after setAuthenticated:
+
+// if this is a history teacher, add privilege           
+            if ($teacher[1] == 'history')
+                 $user->addPrivilege('history', 'tutorial');
+
+and try again. Now miller should be able to view the list, whereas smith and jones get the error message.
+
+To make things nice and tidy, we should also have a Logout action. You can probably guess more or less what this looks like:
+
+<?php
+class LogoutAction extends Action
+{
+    function execute (&$controller, &$request, &$user)
+    {
+        $user->setAuthenticated(FALSE);
+        $user->removePrivileges('tutorial');
+        $controller->forward(DEFAULT_MODULE, DEFAULT_ACTION);
+        return VIEW_NONE;
+    }
+}
+?>
+
+Yes, we unset Authenticated and, just to be sure, remove all the privileges for our tutorial namespace. If you want to look more deeply into how it stores the privileges, look at the session data on your server or dump $user.
+Streamline, optimise, refactor . . .
+So, let's look at what we've got so far: 3 modules: Default has 6 actions, 2 templates, 5 views; Children has 2 actions, 2 templates, 3 views; Teachers has 1 of each. Plus 1 global template. Quite a lot, really, for something that doesn't do very much. And quite a lot of duplication within them. Time for some optimising.
+
+Let's start with the templates. Many of them have a similar structure; wouldn't it be better if we put all the common structure in 1 file, using the other templates solely for the markup that is unique to them. This has the disadvantage that the individual (body) templates are now no longer complete HTML files and some editors might not be able to maintain them. On the other hand, it has the big advantage that we only need to define the common parts such as headers, footers and stylesheet once, and can use common methods to fill in the common elements.
+
+So, go to the global template directory and create a new template. Let's call it main.php (note: extension names are not significant here, as the templates are never called directly, they are only included, so you can call it main, main.html, main.tpl or whatever you like):
+
+<html>
+<head>
+<title><?= $template['title']?></title>
+<style type="text/css">
+.boy { color: blue }
+.girl { color: #red }
+</style>
+</head>
+<body>
+<h3><?= $template['title']?></h3>
+<div class="body">
+    <?= $template['body']?>
+</div>
+</body>
+</html>
+
+Instead of hard-coding a different title in each template, we now have a variable which we must set in the view; similarly, we also now have a body variable will also need to be set to the contents of the sub-template.
+Now let's go to the default view and change it to use this new template. There are various ways of doing this of course, but as this is a tutorial on the features of Mojavi, let's use a Mojavi renderer to render the sub-template:
+
+<?php
+class DefaultIndexView extends View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $subrenderer = new Renderer($controller, $request, $user); 
+        $subrenderer->setMode(RENDER_VAR);
+        $subrenderer->setTemplate('select.php');
+        $subrenderer->execute($controller, $request, $user); 
+	
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('main.php');
+        $renderer->setAttribute('title', 'School Display');
+        $renderer->setAttribute('body', $subrenderer->fetchResult($controller, $request, $user)); 
+        return $renderer;
+    }
+}
+?>
+
+Mojavi's default renderer has 2 render modes: the default is RENDER_CLIENT, to display to the browser, but there is also RENDER_VAR where the execute function sends the result to a variable, which you can fetch with, surprise surprise, fetchResult. So, we set up a new renderer for the subtemplate, set the mode, assign the template, execute the renderer and fetch the result into the body attribute of our main template.
+
+The sub-template, select.php, will now look like this:
+
+<div>Please select whether you want to display children or teachers</div>
+<form method=POST action="?module=Default&action=Select">
+<input name="choice"  type="radio" value="Children">Children<br>
+<input name="choice"  type="radio" value="Teachers">Teachers<br>
+<input type="submit" name="submit" value="Submit" />
+</form>
+
+Try it and see.
+
+Now change all the other views/templates to use a similar process. Bet you don't get very far before you notice that there's an awful lot of repetition: the same instructions appear in every view. Time to move the common logic into a common base class with an inherited method!
+Inheriting common logic
+Here's the view logic above, with the action/view-specific instructions highlighted:
+
+        $subrenderer = new Renderer($controller, $request, $user); 
+        $subrenderer->setMode(RENDER_VAR);
+        $subrenderer->setTemplate('select.php');
+        $subrenderer->execute($controller, $request, $user); 
+	
+        $renderer =& new Renderer($controller, $request, $user);
+        $renderer->setTemplate('main.php');
+        $renderer->setAttribute('title', 'School Display');
+        $renderer->setAttribute('body', $subrenderer->fetchResult($controller, $request, $user)); 
+        return $renderer;
+
+Not a lot really! So all we need to define at the individual view level is these two things (well, not quite true - this is a simple text example without any additional attributes in the sub-template being set, so we'll define those too). At the BASE_DIR level, create a new directory for the base classes (mojavi-all-classes defines LIB_DIR as BASE_DIR/lib so we might as well use that), and then we'll define our base view and put it there:
+
+<?php
+class Base_View extends View
+{
+    var $sub_template;  // the name of the sub-template
+    var $title;  // page title
+    var $sub_vars; // array of the variables for the sub template
+    var $renderer; // main renderer
+    
+    function execute ($controller, $request, $user)
+    {
+        $subrenderer = new Renderer($controller, $request, $user); 
+        $subrenderer->setMode(RENDER_VAR);
+        $subrenderer->setTemplate($this->sub_template);
+        $subrenderer->setArray($this->sub_vars);
+        $subrenderer->execute($controller, $request, $user); 
+	
+        $this->renderer = new Renderer($controller, $request, $user);
+        $this->renderer->setTemplate('main.php');
+        $this->renderer->setAttribute('title', $this->title);
+        $this->renderer->setAttribute('body', $subrenderer->fetchResult($controller, $request, $user)); 
+    }
+}
+?>
+
+This base class handles all the common logic; note that Renderer also has a setArray function, so you can set several variables all at once. Now all our child-class has to do is set the appropriate variables and call the parent execute function. We'll use the LoginView as an example, as that has more than one variable:
+
+<?php
+require_once(LIB_DIR . 'Base_View.class.php');
+class LoginView extends Base_View
+{
+    function & execute (&$controller, &$request, &$user)
+    {
+        $this->title = 'School Display Login';
+        $this->sub_template = 'login.php';
+        $this->sub_vars['username'] = $request->getParameter('username');
+        $this->sub_vars['error'] = $request->getError('login');
+        parent::execute($controller, $request, $user);
+        return $this->renderer;
+    }
+}
+?>
+
+Sets title, the name of the sub-template, and two variables in the sub-template; executes the parent execute function and returns the object's renderer, set by the parent class. Now you can change all the other views to extend our new Base_View and not only save a lot of code, but simplify maintenance by ensuring code is only in one place.
+
+We can now apply the same sort of  process to the actions. Notice, for example, how several of the actions simply return REQ_NONE request methods and VIEW_SUCCESS Default View. These are the ones that don't access any data model; I'm tempted to call them Inactions, but more correctly they're a DataBypassAction, so let's create a base class called that:
+
+<?php
+class DataBypassAction extends Action
+{
+    function getDefaultView (&$controller, &$request, &$user)
+    {
+        return VIEW_SUCCESS;
+    }
+
+    function getRequestMethods ()
+    {
+        return REQ_NONE;
+    }
+}
+?>
+
+and modify the child classes to extend it:
+
+<?php
+require_once(LIB_DIR . 'DataBypassAction.class.php');
+class DefaultIndexAction extends DataBypassAction
+{
+}
+?>
+
+Now that really is an Inaction: does nothing at all except inherit behaviour! Now change the others (I make it four altogether), and test it all through again.
+Displaying information on all pages
+That brings us on nicely to the next subject. Whilst testing, you probably got rather confused as to whether or not you were logged in or not. How much better if something were to appear at the top or bottom of the screen to say which user if any were logged in! Let's add that: if no-one's logged in we display a link to the login page; if a user is logged in we display the name and a logout link. And we'll put that on every page.
+
+Casting your mind back to the authentication section, you can probably guess how to check whether someone is logged in or not: the User object has an isAuthenticated method. And you now know how to put it on every page: put the logic in the base class. We're not actually storing username anywhere, so the first thing we have to do is add that to the login action, but where to store it? If we store it in the request, it won't persist beyond the one request, whereas we want it stored in the session. Fortunately, the User object not only has a setPrivilege method, it also has a setAttribute method, and the User attributes are serialized to the session data along with the privileges. So add the following line to the login action:
+
+       $user->setAttribute('username', $username);
+
+Next, we'll add a new <div> in the appropriate place in our main.php template; while we're at it, we might as well add a homepage link as well:
+
+<div class="homelink">
+    <?= $template['homelink']?>
+</div>
+<div class="userdata">
+    <?= $template['userdata']?>
+</div>
+
+And finally we can add something like the following at the end of our base view:
+
+// homepage link       
+       $this->renderer->setAttribute('homelink', '<a href="?module='.DEFAULT_MODULE.'&action='.DEFAULT_ACTION.'">Homepage</a>');
+// user data section       
+       if ($user->isAuthenticated())
+            $this->renderer->setAttribute('userdata', 'User: ' . $user->getAttribute('username') . ' <a href="?module='.DEFAULT_MODULE.'&action=Logout">Logout</a>');
+       else
+            $this->renderer->setAttribute('userdata', '<a href="?module='.DEFAULT_MODULE.'&action=Login">Login</a>');
+
+Now try server.com/ again, log in and out and generally test thoroughly. Not the most elegant or user-friendly of user interfaces, but if you want to improve it don't let me stop you.
